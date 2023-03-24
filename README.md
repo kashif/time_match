@@ -1,1 +1,8 @@
-# time_match
+# Time Match
+
+## Prerequisites
+
+```
+pip install -U -r requirements.txt
+```
+
