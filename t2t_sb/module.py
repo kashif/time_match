@@ -15,7 +15,9 @@ from typing import List, Optional, Tuple
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
+import numpy as np
 from gluonts.core.component import validated
 from gluonts.itertools import prod
 from gluonts.model import Input, InputSpec
@@ -25,13 +27,14 @@ from gluonts.torch.scaler import MeanScaler, NOPScaler, Scaler, StdScaler
 from gluonts.torch.util import repeat_along_dim, unsqueeze_expand
 from pts.util import lagged_sequence_values
 
+
 from .unet_1d import UNet1DConditionModel
-from .cond_flow_matching import CFM
+from .diffusion import Diffusion, space_indices
 
 
-class TimeMatchModel(nn.Module):
+class T2TSBModel(nn.Module):
     """
-    Module implementing the TimeMatch model.
+    Module implementing the T2TSBModel model.
 
     Parameters
     ----------
@@ -82,6 +85,11 @@ class TimeMatchModel(nn.Module):
         freq: str,
         context_length: int,
         prediction_length: int,
+        linear_start: float = 1e-4,
+        linear_end: float = 2e-2,
+        n_timestep: int = 200,
+        log_count: int = 10,
+        ot_ode: bool = False,
         input_size: int = 1,
         num_feat_dynamic_real: int = 1,
         num_feat_static_real: int = 1,
@@ -111,6 +119,10 @@ class TimeMatchModel(nn.Module):
         self.prediction_length = prediction_length
         self.input_size = input_size
 
+        self.n_timestep = n_timestep
+        self.ot_ode = ot_ode
+        self.log_count = log_count
+
         self.num_feat_dynamic_real = num_feat_dynamic_real
         self.num_feat_static_cat = num_feat_static_cat
         self.num_feat_static_real = num_feat_static_real
@@ -120,7 +132,7 @@ class TimeMatchModel(nn.Module):
             else [min(50, (cat + 1) // 2) for cat in cardinality]
         )
         self.lags_seq = lags_seq or get_lags_for_frequency(freq_str=freq)
-        self.lags_seq = [l - 1 for l in self.lags_seq]
+        self.lags_seq = [lag - 1 for lag in self.lags_seq]
         self.num_parallel_samples = num_parallel_samples
         self.past_length = self.context_length + max(self.lags_seq)
         self.embedder = FeatureEmbedder(
@@ -146,12 +158,25 @@ class TimeMatchModel(nn.Module):
             batch_first=True,
         )
 
-        # conditional flow matching unet
+        # conditional T2TSB unet
         self.unet = UNet1DConditionModel(
             target_dim=self.input_size, hidden_size=hidden_size
         )
-        # TODO allow selecting different modules here
-        self.cfm = CFM(dim=self.input_size, unet=self.unet)
+
+        # TODO add SB module
+        betas = (
+            np.linspace(
+                linear_start**0.5, linear_end**0.5, n_timestep, dtype=np.float64
+            )
+            ** 2
+        )
+        betas = np.concatenate(
+            [betas[: n_timestep // 2], np.flip(betas[: n_timestep // 2])]
+        )
+
+        self.register_buffer("betas", torch.tensor(betas))
+
+        self.diffusion = Diffusion(self.betas)
 
     def describe_inputs(self, batch_size=1) -> InputSpec:
         return InputSpec(
@@ -384,12 +409,28 @@ class TimeMatchModel(nn.Module):
             repeats=num_parallel_samples, dim=0
         )
 
-        next_sample = self.cfm.sample(
+        nfe = self.n_timestep - 1
+        steps = space_indices(self.n_timestep, nfe + 1)
+
+        # create log steps
+        log_count = min(len(steps) - 1, self.log_count)
+        log_steps = [steps[i] for i in space_indices(len(steps) - 1, log_count)]
+
+        def pred_x0_fn(xt, step, cond):
+            step = torch.full((xt.shape[0],), step, device=xt.device, dtype=torch.long)
+            out = self.unet(xt, step, cond=cond)
+            return self.compute_pred_x0(step, xt, out)
+
+        # sample
+        xs, _ = self.diffusion.ddpm_sampling(
+            steps,
+            pred_x0_fn,
             repeated_past_target[:, -1:, ...],
             repeated_outputs[:, -1:, ...],
-            loc=repeated_loc,
-            scale=repeated_scale,
+            ot_ode=self.ot_ode,
+            log_steps=log_steps,
         )
+        next_sample = xs[:, 0, ...] * repeated_scale + repeated_loc
         future_samples = [next_sample]
 
         for k in range(1, self.prediction_length):
@@ -408,13 +449,15 @@ class TimeMatchModel(nn.Module):
             repeated_past_target = torch.cat(
                 (repeated_past_target, scaled_next_sample), dim=1
             )
-
-            next_sample = self.cfm.sample(
+            xs, _ = self.diffusion.ddpm_sampling(
+                steps,
+                pred_x0_fn,
                 scaled_next_sample,
                 repeated_outputs,
-                loc=repeated_loc,
-                scale=repeated_scale,
+                ot_ode=self.ot_ode,
+                log_steps=log_steps,
             )
+            next_sample = xs[:, 0, ...] * repeated_scale + repeated_loc
             future_samples.append(next_sample)
 
         future_samples_concat = torch.cat(future_samples, dim=1).reshape(
@@ -466,9 +509,7 @@ class TimeMatchModel(nn.Module):
 
         if future_only:
             # TODO Fix this case
-            loss_values = self.cfm.loss(
-                past_target, rnn_ouputs, future_target_reshaped, loc=loc, scale=scale
-            ) * future_observed_reshaped.all(-1)
+            pass
         else:
             context_target = past_target[:, -self.context_length + 1 :, ...]
             target = torch.cat(
@@ -484,7 +525,7 @@ class TimeMatchModel(nn.Module):
                 if observed_values.ndim == 3
                 else observed_values
             )
-            # TODO: check context_past
+
             context_past = torch.cat(
                 (
                     past_target[:, -self.context_length :, ...],
@@ -493,11 +534,43 @@ class TimeMatchModel(nn.Module):
                 dim=1,
             )
 
-            loss_values = (
-                self.cfm.loss(
-                    context_past, rnn_ouputs, target, loc=loc, scale=scale
-                ).mean(-1)
-                * observed_values
+            batch, time, _ = context_past.shape
+            step = torch.randint(
+                0, self.n_timestep, (batch * time,), device=context_past.device
+            )
+            xt = self.diffusion.q_sample(
+                step,
+                context_past.reshape(batch * time, -1),
+                target.reshape(batch * time, -1),
+                ot_ode=self.ot_ode,
             )
 
+            label = self.compute_label(step, context_past.reshape(batch * time, -1), xt)
+            pred = self.unet(
+                inputs=xt.reshape(batch * time, 1, -1),
+                time=step.reshape(batch * time),
+                cond=rnn_ouputs.reshape(batch * time, 1, -1),
+            )
+            loss = F.mse_loss(
+                pred.reshape(batch, time, -1),
+                label.reshape(batch, time, -1),
+                reduction="none",
+            )
+
+            loss_values = loss.mean(-1) * observed_values
+
         return aggregate_by(loss_values, dim=(1,))
+
+    def compute_label(self, step, x0, xt):
+        """Eq 12"""
+        std_fwd = self.diffusion.get_std_fwd(step, xdim=x0.shape[1:])
+        label = (xt - x0) / std_fwd
+        return label.detach()
+
+    def compute_pred_x0(self, step, xt, net_out, clip_denoise=False):
+        """Given network output, recover x0. This should be the inverse of Eq 12"""
+        std_fwd = self.diffusion.get_std_fwd(step, xdim=xt.shape[1:])
+        pred_x0 = xt - std_fwd * net_out
+        if clip_denoise:
+            pred_x0.clamp_(-1.0, 1.0)
+        return pred_x0

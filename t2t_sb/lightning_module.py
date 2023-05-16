@@ -17,23 +17,22 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from gluonts.core.component import validated
 from gluonts.itertools import select
-from gluonts.torch.modules.loss import DistributionLoss, NegativeLogLikelihood
 
-from .module import TimeMatchModel
+from .module import T2TSBModel
 
 
-class TimeMatchLightningModule(pl.LightningModule):
+class T2TSBLightningModule(pl.LightningModule):
     """
     A ``pl.LightningModule`` class that can be used to train a
-    ``TimeMatchModel`` with PyTorch Lightning.
+    ``T2TSBModel`` with PyTorch Lightning.
 
-    This is a thin layer around a (wrapped) ``TimeMatchModel`` object,
+    This is a thin layer around a (wrapped) ``T2TSBModel`` object,
     that exposes the methods to evaluate training and validation loss.
 
     Parameters
     ----------
     model
-        ``TimeMatchModel`` to be trained.
+        ``T2TSBModel`` to be trained.
     lr
         Learning rate, default: ``1e-3``.
     weight_decay
@@ -52,7 +51,7 @@ class TimeMatchLightningModule(pl.LightningModule):
     ) -> None:
         super().__init__()
         self.save_hyperparameters()
-        self.model = TimeMatchModel(**model_kwargs)
+        self.model = T2TSBModel(**model_kwargs)
         self.lr = lr
         self.weight_decay = weight_decay
         self.patience = patience

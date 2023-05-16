@@ -1,10 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions import MultivariateNormal
-
-from torchdyn.core import NeuralODE
-from torchcubicspline import NaturalCubicSpline, natural_cubic_spline_coeffs
 
 
 class CFM(nn.Module):
@@ -25,6 +21,7 @@ class CFM(nn.Module):
 
     def loss(self, past_target, hidden_state, future_target, loc=None, scale=None):
         """Compute the loss for the given batch conditioned on hidden_state."""
+        # TODO double check this
         scaled_past_target = (past_target - loc) / scale
         scaled_future_target = (future_target - loc) / scale
 
@@ -45,10 +42,13 @@ class CFM(nn.Module):
 
         return F.mse_loss(outputs.reshape(batch, time, -1), ut, reduction="none")
 
-    def sample(self, scaled_past_target, hidden_state, loc=None, scale=None):
+    def sample(
+        self, scaled_past_target, hidden_state, loc=None, scale=None, sample_size=()
+    ):
         """Sample from the model for the given batch conditioned on the hidden_state."""
         # TODO: implement
         # return dummy output
+
         return (scaled_past_target + loc) * scale
 
 

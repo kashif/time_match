@@ -103,12 +103,12 @@ class TimeMatchEstimator(PyTorchLightningEstimator):
     embedding_dimension
         Dimension of the embeddings for categorical features
         (default: ``[min(50, (cat+1)//2) for cat in cardinality]``).
-    distr_output
-        Distribution to use to evaluate observations and sample predictions
-        (default: StudentTOutput()).
-    loss
-        Loss to be optimized during training
-        (default: ``NegativeLogLikelihood()``).
+    # distr_output
+    #     Distribution to use to evaluate observations and sample predictions
+    #     (default: StudentTOutput()).
+    # loss
+    #     Loss to be optimized during training
+    #     (default: ``NegativeLogLikelihood()``).
     scaling
         Whether to automatically scale the target values (default: "mean"). Can be
         set to "none" to disable scaling, to "std" to apply Std Scaling, or to
