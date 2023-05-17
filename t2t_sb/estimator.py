@@ -103,12 +103,6 @@ class T2TSBEstimator(PyTorchLightningEstimator):
     embedding_dimension
         Dimension of the embeddings for categorical features
         (default: ``[min(50, (cat+1)//2) for cat in cardinality]``).
-    # distr_output
-    #     Distribution to use to evaluate observations and sample predictions
-    #     (default: StudentTOutput()).
-    # loss
-    #     Loss to be optimized during training
-    #     (default: ``NegativeLogLikelihood()``).
     scaling
         Whether to automatically scale the target values (default: "mean"). Can be
         set to "none" to disable scaling, to "std" to apply Std Scaling, or to
@@ -148,6 +142,12 @@ class T2TSBEstimator(PyTorchLightningEstimator):
         prediction_length: int,
         input_size: int = 1,
         context_length: Optional[int] = None,
+        linear_start: float = 1e-4,
+        linear_end: float = 2e-2,
+        n_timestep: int = 200,
+        log_count: int = 10,
+        ot_ode: bool = False,
+        nfe: Optional[int] = None,
         num_layers: int = 2,
         hidden_size: int = 40,
         lr: float = 1e-3,
@@ -159,8 +159,6 @@ class T2TSBEstimator(PyTorchLightningEstimator):
         num_feat_static_real: int = 0,
         cardinality: Optional[List[int]] = None,
         embedding_dimension: Optional[List[int]] = None,
-        # distr_output: DistributionOutput = StudentTOutput(),
-        # loss: DistributionLoss = NegativeLogLikelihood(),
         scaling: Optional[str] = "mean",
         default_scale: float = 0.0,
         lags_seq: Optional[List[int]] = None,
@@ -187,9 +185,14 @@ class T2TSBEstimator(PyTorchLightningEstimator):
         self.context_length = (
             context_length if context_length is not None else prediction_length
         )
+        self.linear_start = linear_start
+        self.linear_end = linear_end
+        self.n_timestep = n_timestep
+        self.log_count = log_count
+        self.ot_ode = ot_ode
+        self.nfe = nfe
+
         self.patience = patience
-        # self.distr_output = distr_output
-        # self.loss = loss
         self.num_layers = num_layers
         self.hidden_size = hidden_size
         self.lr = lr
@@ -365,7 +368,6 @@ class T2TSBEstimator(PyTorchLightningEstimator):
 
     def create_lightning_module(self) -> T2TSBLightningModule:
         return T2TSBLightningModule(
-            # loss=self.loss,
             lr=self.lr,
             weight_decay=self.weight_decay,
             patience=self.patience,
@@ -374,6 +376,12 @@ class T2TSBEstimator(PyTorchLightningEstimator):
                 "context_length": self.context_length,
                 "prediction_length": self.prediction_length,
                 "input_size": self.input_size,
+                "linear_start": self.linear_start,
+                "linear_end": self.linear_end,
+                "n_timestep": self.n_timestep,
+                "log_count": self.log_count,
+                "ot_ode": self.ot_ode,
+                "nfe": self.nfe,
                 "num_feat_dynamic_real": (
                     1 + self.num_feat_dynamic_real + len(self.time_features)
                 ),
@@ -383,7 +391,6 @@ class T2TSBEstimator(PyTorchLightningEstimator):
                 "embedding_dimension": self.embedding_dimension,
                 "num_layers": self.num_layers,
                 "hidden_size": self.hidden_size,
-                # "distr_output": self.distr_output,
                 "dropout_rate": self.dropout_rate,
                 "lags_seq": self.lags_seq,
                 "scaling": self.scaling,

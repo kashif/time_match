@@ -90,6 +90,7 @@ class T2TSBModel(nn.Module):
         n_timestep: int = 200,
         log_count: int = 10,
         ot_ode: bool = False,
+        nfe: Optional[int] = None,
         input_size: int = 1,
         num_feat_dynamic_real: int = 1,
         num_feat_static_real: int = 1,
@@ -122,6 +123,7 @@ class T2TSBModel(nn.Module):
         self.n_timestep = n_timestep
         self.ot_ode = ot_ode
         self.log_count = log_count
+        self.nfe = nfe
 
         self.num_feat_dynamic_real = num_feat_dynamic_real
         self.num_feat_static_cat = num_feat_static_cat
@@ -136,8 +138,7 @@ class T2TSBModel(nn.Module):
         self.num_parallel_samples = num_parallel_samples
         self.past_length = self.context_length + max(self.lags_seq)
         self.embedder = FeatureEmbedder(
-            cardinalities=cardinality,
-            embedding_dims=self.embedding_dimension,
+            cardinalities=cardinality, embedding_dims=self.embedding_dimension
         )
         if scaling == "mean":
             self.scaler: Scaler = MeanScaler(
@@ -159,12 +160,12 @@ class T2TSBModel(nn.Module):
             batch_first=True,
         )
 
-        # conditional T2TSB unet
+        # conditional T2T-SB unet
         self.unet = UNet1DConditionModel(
             target_dim=self.input_size, hidden_size=hidden_size
         )
 
-        # TODO add SB module
+        # SB module
         betas = (
             np.linspace(
                 linear_start**0.5, linear_end**0.5, n_timestep, dtype=np.float64
@@ -174,9 +175,7 @@ class T2TSBModel(nn.Module):
         betas = np.concatenate(
             [betas[: n_timestep // 2], np.flip(betas[: n_timestep // 2])]
         )
-
         self.register_buffer("betas", torch.tensor(betas))
-
         self.diffusion = Diffusion(self.betas)
 
     def describe_inputs(self, batch_size=1) -> InputSpec:
@@ -410,7 +409,7 @@ class T2TSBModel(nn.Module):
             repeats=num_parallel_samples, dim=0
         )
 
-        nfe = self.n_timestep - 1
+        nfe = self.nfe or self.n_timestep - 1
         steps = space_indices(self.n_timestep, nfe + 1)
 
         # create log steps
@@ -513,9 +512,15 @@ class T2TSBModel(nn.Module):
             # TODO Fix this case
             pass
         else:
-            context_target = past_target[:, -self.context_length + 1 :, ...]
             target = (
-                torch.cat((context_target, future_target_reshaped), dim=1) - loc
+                torch.cat(
+                    (
+                        past_target[:, -self.context_length + 1 :, ...],
+                        future_target_reshaped,
+                    ),
+                    dim=1,
+                )
+                - loc
             ) / scale
             context_observed = past_observed_values[:, -self.context_length + 1 :, ...]
             observed_values = torch.cat(
@@ -555,7 +560,7 @@ class T2TSBModel(nn.Module):
                 time=step.reshape(batch * time),
                 cond=rnn_ouputs.reshape(batch * time, 1, -1),
             )
-            loss = F.mse_loss(
+            loss = F.l1_loss(
                 pred.reshape(batch, time, -1),
                 label.reshape(batch, time, -1),
                 reduction="none",
