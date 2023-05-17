@@ -91,6 +91,7 @@ class T2TSBModel(nn.Module):
         log_count: int = 10,
         ot_ode: bool = False,
         nfe: Optional[int] = None,
+        loss: str = "mse",
         input_size: int = 1,
         num_feat_dynamic_real: int = 1,
         num_feat_static_real: int = 1,
@@ -124,6 +125,7 @@ class T2TSBModel(nn.Module):
         self.ot_ode = ot_ode
         self.log_count = log_count
         self.nfe = nfe
+        self.loss_type = loss
 
         self.num_feat_dynamic_real = num_feat_dynamic_real
         self.num_feat_static_cat = num_feat_static_cat
@@ -425,12 +427,12 @@ class T2TSBModel(nn.Module):
         xs, _ = self.diffusion.ddpm_sampling(
             steps,
             pred_x0_fn,
-            repeated_past_target[:, -1:, ...],
+            repeated_past_target[:, -1:, ...] * repeated_scale + repeated_loc,
             repeated_outputs[:, -1:, ...],
             ot_ode=self.ot_ode,
             log_steps=log_steps,
         )
-        next_sample = xs[:, 0, ...] * repeated_scale + repeated_loc
+        next_sample = xs[:, 0, ...]
         future_samples = [next_sample]
 
         for k in range(1, self.prediction_length):
@@ -453,12 +455,12 @@ class T2TSBModel(nn.Module):
             xs, _ = self.diffusion.ddpm_sampling(
                 steps,
                 pred_x0_fn,
-                scaled_next_sample,
+                next_sample,
                 repeated_outputs,
                 ot_ode=self.ot_ode,
                 log_steps=log_steps,
             )
-            next_sample = xs[:, 0, ...] * repeated_scale + repeated_loc
+            next_sample = xs[:, 0, ...]
             future_samples.append(next_sample)
 
         future_samples_concat = torch.cat(future_samples, dim=1).reshape(
@@ -498,7 +500,7 @@ class T2TSBModel(nn.Module):
             -1, *future_observed_values.shape[extra_dims + 1 :]
         )
 
-        rnn_ouputs, loc, scale, _, _, _ = self.unroll_lagged_rnn(
+        rnn_ouputs, _, _, _, _, _ = self.unroll_lagged_rnn(
             feat_static_cat,
             feat_static_real,
             past_time_feat,
@@ -512,16 +514,13 @@ class T2TSBModel(nn.Module):
             # TODO Fix this case
             pass
         else:
-            target = (
-                torch.cat(
-                    (
-                        past_target[:, -self.context_length + 1 :, ...],
-                        future_target_reshaped,
-                    ),
-                    dim=1,
-                )
-                - loc
-            ) / scale
+            target = torch.cat(
+                (
+                    past_target[:, -self.context_length + 1 :, ...],
+                    future_target_reshaped,
+                ),
+                dim=1,
+            )
             context_observed = past_observed_values[:, -self.context_length + 1 :, ...]
             observed_values = torch.cat(
                 (context_observed, future_observed_reshaped), dim=1
@@ -532,16 +531,13 @@ class T2TSBModel(nn.Module):
                 else observed_values
             )
 
-            context_past = (
-                torch.cat(
-                    (
-                        past_target[:, -self.context_length :, ...],
-                        future_target_reshaped[:, :-1, ...],
-                    ),
-                    dim=1,
-                )
-                - loc
-            ) / scale
+            context_past = torch.cat(
+                (
+                    past_target[:, -self.context_length :, ...],
+                    future_target_reshaped[:, :-1, ...],
+                ),
+                dim=1,
+            )
 
             batch, time, _ = context_past.shape
             step = torch.randint(
@@ -560,11 +556,30 @@ class T2TSBModel(nn.Module):
                 time=step.reshape(batch * time),
                 cond=rnn_ouputs.reshape(batch * time, 1, -1),
             )
-            loss = F.l1_loss(
-                pred.reshape(batch, time, -1),
-                label.reshape(batch, time, -1),
-                reduction="none",
-            )
+            if self.loss_type == "l1":
+                loss = F.l1_loss(
+                    pred.reshape(batch, time, -1),
+                    label.reshape(batch, time, -1),
+                    reduction="none",
+                )
+            elif self.loss_type == "mse":
+                loss = F.mse_loss(
+                    pred.reshape(batch, time, -1),
+                    label.reshape(batch, time, -1),
+                    reduction="none",
+                )
+            elif self.loss_type == "huber":
+                loss = F.huber_loss(
+                    pred.reshape(batch, time, -1),
+                    label.reshape(batch, time, -1),
+                    reduction="none",
+                )
+            else:
+                loss = F.smooth_l1_loss(
+                    pred.reshape(batch, time, -1),
+                    label.reshape(batch, time, -1),
+                    reduction="none",
+                )
 
             loss_values = loss.mean(-1) * observed_values
 

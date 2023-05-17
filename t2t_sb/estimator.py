@@ -148,6 +148,7 @@ class T2TSBEstimator(PyTorchLightningEstimator):
         log_count: int = 10,
         ot_ode: bool = False,
         nfe: Optional[int] = None,
+        loss: str = "mae",
         num_layers: int = 2,
         hidden_size: int = 40,
         lr: float = 1e-3,
@@ -191,6 +192,7 @@ class T2TSBEstimator(PyTorchLightningEstimator):
         self.log_count = log_count
         self.ot_ode = ot_ode
         self.nfe = nfe
+        self.loss = loss
 
         self.patience = patience
         self.num_layers = num_layers
@@ -382,6 +384,7 @@ class T2TSBEstimator(PyTorchLightningEstimator):
                 "log_count": self.log_count,
                 "ot_ode": self.ot_ode,
                 "nfe": self.nfe,
+                "loss": self.loss,
                 "num_feat_dynamic_real": (
                     1 + self.num_feat_dynamic_real + len(self.time_features)
                 ),
