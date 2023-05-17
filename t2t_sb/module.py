@@ -147,6 +147,7 @@ class T2TSBModel(nn.Module):
             self.scaler: Scaler = StdScaler(dim=1, keepdim=True)
         else:
             self.scaler: Scaler = NOPScaler(dim=1, keepdim=True)
+
         self.rnn_input_size = (
             self.input_size * len(self.lags_seq) + self._number_of_features
         )
@@ -449,6 +450,7 @@ class T2TSBModel(nn.Module):
             repeated_past_target = torch.cat(
                 (repeated_past_target, scaled_next_sample), dim=1
             )
+
             xs, _ = self.diffusion.ddpm_sampling(
                 steps,
                 pred_x0_fn,
@@ -512,10 +514,9 @@ class T2TSBModel(nn.Module):
             pass
         else:
             context_target = past_target[:, -self.context_length + 1 :, ...]
-            target = torch.cat(
-                (context_target, future_target_reshaped),
-                dim=1,
-            )
+            target = (
+                torch.cat((context_target, future_target_reshaped), dim=1) - loc
+            ) / scale
             context_observed = past_observed_values[:, -self.context_length + 1 :, ...]
             observed_values = torch.cat(
                 (context_observed, future_observed_reshaped), dim=1
@@ -526,13 +527,16 @@ class T2TSBModel(nn.Module):
                 else observed_values
             )
 
-            context_past = torch.cat(
-                (
-                    past_target[:, -self.context_length :, ...],
-                    future_target_reshaped[:, :-1, ...],
-                ),
-                dim=1,
-            )
+            context_past = (
+                torch.cat(
+                    (
+                        past_target[:, -self.context_length :, ...],
+                        future_target_reshaped[:, :-1, ...],
+                    ),
+                    dim=1,
+                )
+                - loc
+            ) / scale
 
             batch, time, _ = context_past.shape
             step = torch.randint(
@@ -540,12 +544,12 @@ class T2TSBModel(nn.Module):
             )
             xt = self.diffusion.q_sample(
                 step,
-                context_past.reshape(batch * time, -1),
                 target.reshape(batch * time, -1),
+                context_past.reshape(batch * time, -1),
                 ot_ode=self.ot_ode,
             )
 
-            label = self.compute_label(step, context_past.reshape(batch * time, -1), xt)
+            label = self.compute_label(step, target.reshape(batch * time, -1), xt)
             pred = self.unet(
                 inputs=xt.reshape(batch * time, 1, -1),
                 time=step.reshape(batch * time),
