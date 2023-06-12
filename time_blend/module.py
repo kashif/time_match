@@ -414,7 +414,6 @@ class TimeBlendModel(nn.Module):
                 repeated_outputs,
                 loc=repeated_loc,
                 scale=repeated_scale,
-                sample_size=(num_parallel_samples,),
             )
             future_samples.append(next_sample)
 

@@ -11,14 +11,12 @@ class AlphaBlend(nn.Module):
         self,
         unet,
         dim,
-        sigma_min: float = 0.1,
-        avg_size: int = -1,
-        leaveout_timepoint: int = -1,
+        nb_step: int = 1000,
     ):
         super().__init__()
         self.dim = dim
         self.net = unet
-        self.sigma_min = sigma_min
+        self.nb_step = nb_step
 
     def loss(self, past_target, hidden_state, future_target, loc=None, scale=None):
         """Compute the loss for the given batch conditioned on hidden_state."""
@@ -33,7 +31,7 @@ class AlphaBlend(nn.Module):
             + (1 - alpha).view(-1, time, 1) * scaled_past_target
         )
 
-        loc, scale = self.net(
+        mu, sigma = self.net(
             inputs=x_alpha.reshape(batch * time, 1, -1),
             time=alpha.reshape(batch * time),
             cond=hidden_state.reshape(batch * time, 1, -1),
@@ -41,16 +39,24 @@ class AlphaBlend(nn.Module):
 
         target = scaled_future_target - scaled_past_target
 
-        normal = Normal(
-            loc=loc.view(batch, time, -1), scale=scale.view(batch, time, -1)
-        )
+        normal = Normal(loc=mu.view(batch, time, -1), scale=sigma.view(batch, time, -1))
         return -normal.log_prob(target)
 
-    def sample(
-        self, scaled_past_target, hidden_state, loc=None, scale=None, sample_size=()
-    ):
-        """Sample from the model for the given batch conditioned on the hidden_state."""
-        # TODO: implement
-        # return dummy output
+    @torch.no_grad()
+    def sample(self, scaled_past_target, hidden_state, loc=None, scale=None):
+        batch, _, _ = scaled_past_target.shape
+        x_alpha = scaled_past_target
+        for t in range(self.nb_step):
+            alpha_start = t / self.nb_step
+            alpha_end = (t + 1) / self.nb_step
 
-        return (scaled_past_target + loc) * scale
+            mu, sigma = self.net(
+                inputs=x_alpha,
+                time=torch.tensor([alpha_start], device=x_alpha.device).expand(batch),
+                cond=hidden_state,
+            )
+
+            d = Normal(loc=mu, scale=sigma).sample()
+            x_alpha = x_alpha + (alpha_end - alpha_start) * d.unsqueeze(1)
+
+        return (x_alpha * scale) + loc
