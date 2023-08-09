@@ -1,0 +1,7 @@
+torch
+gluonts
+git+https://github.com/zalandoresearch/pytorch-ts.git@version-0.7.0
+torchdyn
+git+https://github.com/patrick-kidger/torchcubicspline.git
+lightning
+wandb
