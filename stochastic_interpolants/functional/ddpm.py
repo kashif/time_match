@@ -18,7 +18,7 @@ batch_size = 256
 min_T = 32
 max_T = 128
 eval_T = 100
-iters = 25000
+iters = 10000
 
 name = 'results/ddpm'
 device = torch.device(f'cuda:{args.device}')
@@ -74,7 +74,7 @@ for i in pbar:
     if i % 100 == 0:
         pbar.set_description("Loss %s" % loss)
 
-    if i % 5000 == 0:
+    if i % 2500 == 0:
         num_samples = 10
         ts = torch.rand(num_samples, eval_T, 1).sort(1)[0].to(device)
         x_1 = model.sample(ts).view(num_samples, eval_T, 1)

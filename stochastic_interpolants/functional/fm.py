@@ -14,6 +14,7 @@ from time import time
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--device', type=int, default=0)
+parser.add_argument('--gp', action='store_true', default=False)
 parser.add_argument('--source', type=str, default='gp')
 parser.add_argument('--target', type=str, default='sin')
 args = parser.parse_args()
@@ -22,10 +23,12 @@ batch_size = 256
 min_T = 32
 max_T = 128
 eval_T = 100
-iters = 25000
+iters = 10000
 
 name = 'results/fm'
 device = torch.device(f'cuda:{args.device}')
+if args.gp:
+    name = f'{name}_gp'
 name = f'{name}/{args.source}_{args.target}'
 
 if not os.path.exists(name):
@@ -59,7 +62,7 @@ dataset_ts = torch.rand(10, eval_T, 1).sort(1)[0].to(device)
 dataset_x0 = get_data(dataset_ts, args.source).to(device)
 dataset_x1 = get_data(dataset_ts, args.target).to(device)
 
-model = FlowMatching().to(device)
+model = FlowMatching(args.gp).to(device)
 optim = torch.optim.Adam(model.parameters(), lr=0.0001)
 
 pbar = tqdm(range(iters + 1))
@@ -68,7 +71,7 @@ for i in pbar:
     if i % 100 == 0:
         pbar.set_description("Loss %s" % loss)
 
-    if i % 5000 == 0:
+    if i % 2500 == 0:
         num_samples = 10
         ts = torch.rand(num_samples, eval_T, 1).sort(1)[0].to(device)
         x_0 = get_data(dataset_ts, args.source).to(device)

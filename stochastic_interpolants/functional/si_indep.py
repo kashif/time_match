@@ -17,19 +17,21 @@ parser.add_argument('--gp', action='store_true', default=False)
 parser.add_argument('--device', type=int, default=0)
 parser.add_argument('--source', type=str, default='gp')
 parser.add_argument('--target', type=str, default='sin')
+parser.add_argument('--interpolant', type=str, default='Linear')
+parser.add_argument('--gamma', type=str, default='Sqrt')
 args = parser.parse_args()
 
 batch_size = 128
 min_T = 32
 max_T = 128
 eval_T = 100
-iters = 25000
+iters = 10000
 
-name = 'results/si-indep'
+name = f'results/si-indep'
 device = torch.device(f'cuda:{args.device}')
 if args.gp:
     name = f'{name}_gp'
-name = f'{name}/{args.source}_{args.target}'
+name = f'{name}/{args.source}_{args.target}/{args.interpolant}_{args.gamma}'
 
 if not os.path.exists(name):
     os.makedirs(name)
@@ -58,8 +60,21 @@ def train_step(batch_size):
     optim.step()
     return loss.item()
 
-gamma = SqrtGamma()
-interpolant = Linear(gamma).to(device)
+if args.gamma == 'Zero':
+    gamma = Gamma()
+elif args.gamma == 'Sqrt':
+    gamma = SqrtGamma()
+elif args.gamma == 'Quad':
+    gamma = QuadGamma()
+elif args.gamma == 'Trig':
+    gamma = TrigGamma()
+
+if args.interpolant == 'Linear':
+    interpolant = Linear(gamma).to(device)
+elif args.interpolant == 'EncDec':
+    interpolant = EncDec(gamma).to(device)
+elif args.interpolant == 'Trig':
+    interpolant = Trigonometric(gamma)
 
 dataset_ts = torch.rand(10, eval_T, 1).sort(1)[0].to(device)
 dataset_x0 = get_data(dataset_ts, args.source).to(device)
@@ -86,7 +101,7 @@ for i in pbar:
     if i % 100 == 0:
         pbar.set_description("Loss %s" % loss)
 
-    if i % 5000 == 0:
+    if i % 2500 == 0:
         num_samples = 10
         ts = torch.rand(num_samples, eval_T, 1).sort(1)[0].to(device)
         x_0 = get_data(dataset_ts, args.source).to(device)
@@ -100,7 +115,7 @@ for i in pbar:
         num_samples = 10
         ts = torch.rand(num_samples, eval_T, 1).sort(1)[0].to(device)
         x_0 = get_data(ts, args.source).to(device)
-        x_1 = model.sample(x_0, ts, epsilon=0.01).view(num_samples, eval_T, 1)
+        x_1 = model.sample(x_0, ts, epsilon=0.5).view(num_samples, eval_T, 1)
 
         for j in range(10):
             plt.plot(ts[j,:,0].cpu().numpy(), x_1[j,:,0].cpu().numpy(), color='C0', alpha=1 / (j + 1))

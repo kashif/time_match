@@ -1,25 +1,18 @@
 import torch
-import math
-from utils import get_gp_covariance
 import torch.nn as nn
-from gamma import *
+import math
+from gamma import Gamma
+
+EPS = 1e-4
 
 class Interpolant(nn.Module):
     def __init__(self, gamma_fn):
         super(Interpolant, self).__init__()
         self.gamma_fn = gamma_fn
-
+    
     def interpolate(self, x_0, x_1, t):
-        return self.alpha(t) * x_0 + self.beta(t) * x_1
-
-    @torch.no_grad()
-    def noisy_interpolate(self, x_0, x_1, t, ts=None):
         z = torch.randn_like(x_0)
-        if ts is not None:
-            L = get_gp_covariance(ts)
-            L = torch.linalg.cholesky(L)
-            z = L @ z
-        return self.interpolate(x_0, x_1, t) + self.gamma(t) * z, z
+        return self.alpha(t) * x_0 + self.beta(t) * x_1 + self.gamma(t) * z, z
 
     def dt_interpolate(self, x_0, x_1, t):
         return self.alpha_(t) * x_0 + self.beta_(t) * x_1
@@ -91,3 +84,20 @@ class EncDec(Interpolant):
     def beta_(self, t):
         indicator = (t > 0.5).float()
         return -(2 * math.pi * torch.cos(math.pi * t) * torch.sin(math.pi * t)) * indicator
+
+class LearnedInterpolant(Interpolant):
+    def __init__(self, interpolant, addendum):
+        super(LearnedInterpolant, self).__init__(interpolant.gamma_fn)
+        
+        self.interpolant = interpolant
+        self.addendum = addendum
+
+    def interpolate(self, x_0, x_1, t):
+        interp, z = self.interpolant.interpolate(x_0, x_1, t)
+        interp += self.addendum(x_0, x_1, t)
+        return interp, z
+
+    def dt_interpolate(self, x_0, x_1, t):
+        dt_interp = self.interpolant.dt_interpolate(x_0, x_1, t)
+        dt_interp += self.addendum.backward(x_0, x_1, t)
+        return dt_interp
