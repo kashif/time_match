@@ -5,3 +5,4 @@ torchdyn
 git+https://github.com/patrick-kidger/torchcubicspline.git
 lightning
 wandb
+POT
