@@ -414,7 +414,7 @@ class TimeMatchModel(nn.Module):
                 repeated_outputs,
                 loc=repeated_loc,
                 scale=repeated_scale,
-                sample_shape=(num_parallel_samples,),
+                sample_size=(num_parallel_samples,),
             )
             future_samples.append(next_sample)
 

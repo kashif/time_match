@@ -106,7 +106,10 @@ class TimeMatchLightningModule(pl.LightningModule):
         )
         monitor = (
             "val_loss"
-            if self.trainer.fit_loop.epoch_loop.val_loop._data_source.is_defined()
+            if (
+                hasattr(self.trainer.fit_loop.epoch_loop.val_loop, "_data_source") and 
+                self.trainer.fit_loop.epoch_loop.val_loop._data_source.is_defined()
+            )
             else "train_loss"
         )
 
